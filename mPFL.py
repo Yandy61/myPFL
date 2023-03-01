@@ -115,7 +115,4 @@ if __name__ == '__main__':
         train_process(filename, paras)
 
     print("All Done!")
-<<<<<<< HEAD
->>>>>>> b799fed... First commit
-=======
->>>>>>> 23b6b75... second commit
+    
