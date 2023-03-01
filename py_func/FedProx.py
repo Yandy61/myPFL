@@ -185,7 +185,10 @@ def direction_local_learning(model, pre_grad, lamda: float, optimizer, train_dat
 
 def save_pkl(dictionnary, directory, file_name):
     """Save the dictionnary in the directory under the file_name with pickle"""
-    with open(f"saved_exp_info/{directory}/{file_name}.pkl", "wb") as output:
+    path = f"experiments_res/{directory}" 
+    if not os.path.exists(path):
+        os.makedirs(path)
+    with open(f"{path}/{file_name}.pkl", "wb") as output:
         pickle.dump(dictionnary, output)
 
 
@@ -556,10 +559,10 @@ def FedALP(
         ''' <<<<<<<<<<<<<<<<<<<<<<<<每轮覆盖存储loss/acc------------------------ '''
 
     # 训练结束时存储实验数据
-    save_pkl(loss_hist, "loss", "g_" + file_name)
-    save_pkl(acc_hist, "acc", "g_" + file_name)
-    save_pkl(p_loss_hist, "loss", "p_" + file_name)
-    save_pkl(p_acc_hist, "acc", "p_" + file_name)
+    # save_pkl(loss_hist, "loss", "g_" + file_name)
+    # save_pkl(acc_hist, "acc", "g_" + file_name)
+    # save_pkl(p_loss_hist, "loss", "p_" + file_name)
+    # save_pkl(p_acc_hist, "acc", "p_" + file_name)
     
     save_pkl(server_loss_hist, "server_loss", "g_" + file_name)
     save_pkl(server_acc_hist, "server_acc", "g_" + file_name)
@@ -836,11 +839,438 @@ def pFedLDGD(
         ''' <<<<<<<<<<<<<<<<<<<<<<<<每轮覆盖存储loss/acc------------------------ '''
 
     # 训练结束时存储实验数据
-    save_pkl(loss_hist, "loss", file_name)
-    save_pkl(acc_hist, "acc", file_name)
+    # save_pkl(loss_hist, "loss", file_name)
+    # save_pkl(acc_hist, "acc", file_name)
     
     save_pkl(server_loss_hist, "server_loss", file_name)
     save_pkl(server_acc_hist, "server_acc", file_name)
+
+    # 存储最终模型
+    torch.save(
+        model.state_dict(), f"saved_exp_info/final_model/{file_name}.pth"
+    )
+
+    return model, loss_hist, acc_hist
+
+
+
+
+def pFedGLAO(
+    model,
+    n_sampled: int,
+    training_sets: list,
+    testing_sets: list,
+    shannon_list:list,
+    n_iter: int,
+    pre_train: int,
+    n_SGD: int,
+    lr: float,
+    file_name: str,
+    decay=1.0,
+    metric_period=1,
+    mu=0.0,
+    lamda_d=0.0,
+    lamda_n=0.0,
+    decay_norm=1.0,
+    decayD,
+    n_clusters=10,
+    decayP=1.0,
+    local_test=False,
+    beta=0.6
+):
+    """全局与局部动态优化的个性化联邦学习
+    Parameters:
+        - `model`: 模型
+        - `training_sets`: 训练数据集列表,index与客户端index相对应
+        - `testing_set`: 训练数据集列表,index与客户端index相对应
+        - `shannon_list`: 香农多样性指数列表
+        - `n_iter`: 全局轮次
+        - `pre_train`: 预训练轮次   #
+        - `n_SGD`: 本地轮次
+        - `lr`: 初始学习率
+        - `file_name`: 用于存储训练结果的文件名
+        - `decay`: 分组初始化阶段衰减系数，仅应用一轮
+        - `metric_period`: 训练数据记录频次
+        - `mu`: fedProx 正则系数
+        - `lamda_d`: 多样性权重 正则系数
+        - `lamda_n`: 本地目标惩罚项 正则系数
+        - `decay_norm`: 本地目标惩罚项 衰减系数
+        - `n_clusters`: 分组个数    #
+        - `decay1`: 分组后学习衰减率    #
+        - `local_test`: 本地模型测试方法    #
+        - `beta`: 个性化系数    #
+
+    returns :
+        - `model`: 最终的全局模型
+    """
+
+
+    # TODO:保存分组前最后的模型和梯度
+
+    print("========>>> 正在初始化训练")
+
+    # GPU选择
+    device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+    model.to(device)  # 移动模型到cuda
+    print(f"模型放入{device}")
+
+    # 损失函数
+    loss_f = loss_classifier
+
+    ''' ------------------------变量初始化>>>>>>>>>>>>>>>>>>>>>>>> '''
+    sim_type = "cosine"
+    K = len(training_sets)  # clients总数
+    
+    n_samples = np.array([len(db.dataset) for db in training_sets])     # array(K)，每个client拥有的样本数量
+    
+    weights = n_samples / np.sum(n_samples)     # array(K)，每个client样本数量所占权重
+
+    loss_hist = np.zeros((n_iter + 1, K))       # array(n+1,k),记录n轮、k个设备的loss(全局模型)
+    acc_hist = np.zeros((n_iter + 1, K))        # array(n+1,k),记录n轮、k个设备的acc(全局模型)
+
+    p_loss_hist = np.zeros((n_iter + 1, K))     # array(n+1,k),记录n轮、k个设备的loss(簇模型)    
+    p_acc_hist = np.zeros((n_iter + 1, K))      # array(n+1,k),记录n轮、k个设备的acc(簇模型)
+
+    server_loss_hist = []       # list(n,1),记录全局模型n轮的loss
+    server_acc_hist = []        # list(n,1),记录全局模型n轮的acc
+
+    p_server_loss_hist = []     # list(n,1),记录分层分组模型n轮的全局平均loss
+    p_server_acc_hist = []      # list(n,1),记录分层分组模型n轮的全局平均acc
+    
+    # 初始化第0轮设备loss、acc
+    for k, dl in enumerate(training_sets):
+        loss_hist[0, k] = float(loss_dataset(
+            model, dl, loss_f).detach())
+        acc_hist[0, k] = accuracy_dataset(model, dl)
+
+    # 全局模型的loss和acc
+    server_loss = np.dot(weights, loss_hist[0])     # 当前轮次全局模型的平均 loss
+    server_acc = np.dot(weights, acc_hist[0])       # 当前轮次全局模型的平均 acc
+    
+    # 将初始loss、acc加入记录
+    server_loss_hist.append(server_loss)
+    server_acc_hist.append(server_acc)
+
+    # list(K) ,上一轮的梯度列表
+    gradients = []
+    
+    # 上一轮的总梯度
+    grad = get_grad(model, model)
+    
+    # 每组的总梯度
+    grads = []
+    
+    shannon_list = np.array(shannon_list)
+
+    starttime = datetime.now()  # 记录训练开始时时间
+
+    ''' <<<<<<<<<<<<<<<<<<<<<<<<变量初始化------------------------ '''
+
+    print("========>>> 初始化完成")
+    
+
+''' ------------------------完整训练>>>>>>>>>>>>>>>>>>>>>>>> '''
+    # 全局轮次循环
+    for i in range(n_iter):
+
+        i_time = datetime.now()     # 记录当前轮次开始时间
+
+        previous_global_model = deepcopy(model)     # 上一轮的全局模型
+
+        clients_params = []     # 当前轮次 所有客户端模型参数（占内存）
+        sampled_clients_for_grad = []   # 存储梯度的客户端列表
+
+        ''' ------------------------预热阶段>>>>>>>>>>>>>>>>>>>>>>>> '''
+        # 分组前训练
+        if i < pre_train:
+            # print(f"========>>> 第{i+1}轮(未分组)")
+
+            # 将香农指数以权重形式影响聚合
+            shannon_weights = lamda_d * shannon_list / np.sum(shannon_list) + (1-lamda_d) * weights
+            agre_weights = shannon_weights
+
+            for k in range(K):
+                local_model = deepcopy(model)
+                local_optimizer = optim.SGD(local_model.parameters(), lr=lr)
+
+                ''' DONE: 修改本地优化函数，考虑本地模型与全局模型的更新方向 '''
+                direction_local_learning(
+                    local_model,
+                    grad,
+                    lamda_n,
+                    local_optimizer,
+                    training_sets[k],
+                    n_SGD,
+                    loss_f,
+                )
+
+                # 当前客户端最新模型参数
+                list_params = list(local_model.parameters())
+                list_params = [
+                    tens_param.detach() for tens_param in list_params
+                ]
+
+                clients_params.append(list_params)  # 存入当前轮次客户端模型参数列表
+                sampled_clients_for_grad.append(k)  # 参与训练的客户端下标存入列表
+
+        ''' <<<<<<<<<<<<<<<<<<<<<<<<预热阶段------------------------ '''
+
+
+        ''' ------------------------个性化训练阶段>>>>>>>>>>>>>>>>>>>>>>>> '''
+        # 分组后训练
+        if i >= pre_train:
+
+            ''' ------------------------分组初始化阶段>>>>>>>>>>>>>>>>>>>>>>>> '''
+            if i == pre_train :
+                # 分组的那一轮进行初始化
+                decay = decayP
+
+                # 保存预训练模型
+                torch.save(
+                    model.state_dict(), f"saved_exp_info/final_model/pre_{pre_train}.pth"
+                )
+                # TODO:保存梯度信息
+                save_pkl(gradients, "gradPre", file_name + "_grad")
+                
+                print("========>>> 分组信息初始化")
+                
+                ''' //////////////////////分组一次,不然簇id会乱///////////////////////////'''
+                from scipy.cluster.hierarchy import linkage, fcluster
+                from py_func.clustering import get_matrix_similarity_from_grads
+
+                # 根据梯度计算相似度矩阵
+                sim_matrix = get_matrix_similarity_from_grads(
+                    gradients, distance_type=sim_type
+                )
+
+                # 计算层次聚类linkage
+                linkage_matrix = linkage(sim_matrix, "ward")
+
+                # 按最大簇个数聚类，(n,1)，元素为聚类簇 id，id从1开始？
+                clusters = fcluster(
+                    linkage_matrix, n_clusters, criterion="maxclust")
+
+                # 簇_client分布，array(n_clusters,K)，元素为客户权重
+                distri_clusters = pf.get_clusters(
+                    clusters, n_clusters, weights)
+
+                # 初始化簇weight:(n_clusters,1)，元素为组内权重之和。 组模型列表:(n_clusters,1)，元素为组模型
+                clusters_weight, clusters_model = pf.init_clusters_model(
+                    distri_clusters, model)
+
+                # 设备在簇内所占权重
+                clients_weight_in_cluster = pf.get_weight_in_cluster(
+                    distri_clusters)
+
+                '''//////////////////////////////以上区间只能执行一次!!!/////////////////////////////////'''
+
+                # 用于存储簇模型各层个性化权重：list(n_clusters,1) 元素为每组的层个性化权重向量
+                clusters_layer_weights = pf.get_clusters_layer_weights(
+                    pf.get_clusters_avg_grad(distri_clusters, np.array(gradients, dtype = object)), beta
+                )
+
+                # 初始化组梯度
+                for idx in range(n_clusters):
+                    grads.append(deepcopy(grad))
+            ''' <<<<<<<<<<<<<<<<<<<<<<<<分组初始化阶段------------------------ '''
+
+            # print(f"========>>> 第{i+1}轮(分组)")
+            # for k in sample_clients(distri_clusters):
+
+            if local_test:
+                # 3.回发给各簇，加权融合 //已修正，该过程应在测试过acc、loss后进行，在每轮训练前开始
+                clusters_model = pf.cluster_aggregation_process(
+                    model, clusters_model, clusters_layer_weights)
+            
+            for k in range(K):
+                local_model = deepcopy(
+                    clusters_model[(clusters[k] - 1)])       # 本地模型是所属簇的模型
+                local_optimizer = optim.SGD(local_model.parameters(), lr=lr)
+
+                # local_learning(
+                #     local_model,
+                #     mu,
+                #     local_optimizer,
+                #     training_sets[k],
+                #     n_SGD,
+                #     loss_f,
+                # )
+                direction_local_learning(
+                    local_model,
+                    grads[(clusters[k] - 1)],
+                    lamda_n,
+                    local_optimizer,
+                    training_sets[k],
+                    n_SGD,
+                    loss_f,
+                )
+
+                # 当前客户端最新模型参数
+                list_params = list(local_model.parameters())
+                list_params = [
+                    tens_param.detach() for tens_param in list_params
+                ]
+
+                clients_params.append(list_params)  # 存入当前轮次客户端模型参数列表
+                clients_models.append(deepcopy(local_model))    # 存入当前轮次客户端模型列表
+                sampled_clients_for_grad.append(k)  # 参与训练的客户端下标存入列表
+        ''' <<<<<<<<<<<<<<<<<<<<<<<<个性化训练阶段------------------------ '''
+
+
+        ''' ------------------------分组前聚合>>>>>>>>>>>>>>>>>>>>>>>> '''
+        if i < pre_train:
+            # print("========>>> 聚合(未分组)")
+            
+            # 更新全局模型
+            model = FedAvg_agregation_process(
+                deepcopy(model), clients_params, agre_weights
+            )
+
+            # 使用新模型对客户端计算loss/acc
+            if i % metric_period == 0:
+                # loss_hist存储训练集loss
+                for k, dl in enumerate(training_sets):
+                    loss_hist[i + 1, k] = float(
+                        # 每个设备对新模型的loss
+                        loss_dataset(model, dl, loss_f).detach()
+                    )
+                # acc_hist存储测试集acc
+                for k, dl in enumerate(testing_sets):
+                    # 每个设备对新模型的acc
+                    acc_hist[i + 1, k] = accuracy_dataset(model, dl)
+
+                # 记录server的loss、acc
+                server_loss = np.dot(weights, loss_hist[i + 1])     # 当前轮，全局平均 loss
+                server_acc = np.dot(weights, acc_hist[i + 1])       # 当前轮，全局平均 acc
+                server_loss_hist.append(server_loss)                # 所有轮，全局平均 loss
+                server_acc_hist.append(server_acc)                  # 所有轮，全局平均 acc
+
+            nowtime = datetime.now()    # 记录当前时间
+            if i % metric_period == 0:
+                t = str(nowtime - starttime).split(".")[0]
+                print(
+                    f"========>>> 第{i+1}轮:   Loss: {server_loss}    Server Test Accuracy: {server_acc}   —>Time: {t}"
+                )
+            else:
+                t = str(nowtime - i_time).split(".")[0]
+                print(
+                    f"========>>> 第{i+1}轮:   Done  IterTime: {t}"
+                )
+        ''' <<<<<<<<<<<<<<<<<<<<<<<<分组前聚合------------------------ '''
+        
+        ''' ------------------------分组后聚合>>>>>>>>>>>>>>>>>>>>>>>> '''
+        if i >= pre_train:
+            # print("========>>> 聚合(分组)")
+
+            ''' //////////////////////新的聚合方案////////////////////// '''
+            # 1.每个簇内模型FedAvg聚合
+            for idx in range(len(clusters_model)):
+                # 组idx内设备下标 数组
+                index_i = [x for x in np.where(distri_clusters[idx] != 0)[0]]
+
+                # 组内模型按权重聚合
+                
+                tmodel = FedAvg_agregation_process(
+                    clusters_model[idx],
+                    [clients_params[x] for x in index_i],
+                    [clients_weight_in_cluster[x] for x in index_i]
+                )
+                grads[idx] = get_grad(clusters_model[idx], tmodel)
+                clusters_model[idx] = tmodel
+
+            # 2.全局聚合
+            model = FedAvg_agregation_process(
+                model, pf.model_list_to_params(clusters_model), clusters_weight
+            )
+
+            # 3.回发给各簇，加权融合 //已修正，该过程应在测试过acc、loss后进行，在每轮训练前开始
+            if not local_test:
+                clusters_model = pf.cluster_aggregation_process(
+                    model, clusters_model, clusters_layer_weights)
+
+            # 4.测试Acc Loss
+            if i % metric_period == 0:
+
+                for k, dl in enumerate(training_sets):
+                    # 每个设备对新global模型的loss
+                    loss_hist[i + 1, k] = float(
+                        loss_dataset(model, dl, loss_f).detach()
+                    )
+                    # 每个设备对新cluster模型的loss
+                    p_loss_hist[i + 1, k] = float(
+                        loss_dataset(
+                            clusters_model[(clusters[k] - 1)], dl, loss_f).detach()
+                    )
+
+                for k, dl in enumerate(testing_sets):
+                    # 每个设备对新global模型的loss
+                    acc_hist[i + 1, k] = accuracy_dataset(model, dl)
+                    # 每个设备对新cluster模型的acc
+                    p_acc_hist[i + 1, k] = accuracy_dataset(
+                        clusters_model[(clusters[k] - 1)], dl)
+
+                server_loss = np.dot(weights, loss_hist[i + 1])     # 当前轮，全局模型平均 loss
+                server_acc = np.dot(weights, acc_hist[i + 1])       # 当前轮，全局模型平均 acc
+
+                p_server_loss = np.dot(weights, p_loss_hist[i + 1]) # 当前轮，组模型 loss 全局平均
+                p_server_acc = np.dot(weights, p_acc_hist[i + 1])   # 当前轮，组模型 acc 全局平均
+                
+
+                server_loss_hist.append(server_loss)    # 所有轮，全局模型平均 loss
+                server_acc_hist.append(server_acc)      # 所有轮，全局模型平均 acc
+
+                p_server_loss_hist.append(p_server_loss)    # 所有轮，组模型 loss 全局平均
+                p_server_acc_hist.append(p_server_acc)      # 所有轮，组模型 acc 全局平均
+                
+            nowtime = datetime.now()
+            if i % metric_period == 0:
+                t = str(nowtime-starttime).split(".")[0]
+                print(
+                    f"========>>> 第{i+1}轮(分组):   Loss: {server_loss}    Server Test Accuracy: {server_acc}"
+                )
+                print(
+                    f"========>>> 第{i+1}轮(分组): p_Loss: {p_server_loss}  p_Server Test Accuracy: {p_server_acc}   —>Time: {t}"
+                )
+            else:
+                t = str(nowtime-i_time).split(".")[0]
+                print(
+                    f"========>>> 第{i+1}轮(分组):   Done  IterTime: {t}"
+                )
+        ''' <<<<<<<<<<<<<<<<<<<<<<<<分组后聚合------------------------ '''
+
+        # 更新最新梯度gradients
+        gradients = get_gradients(
+            previous_global_model, clients_params
+        )
+        # 更新总梯度
+        grad = get_grad(previous_global_model, model)
+
+        # 学习率衰减
+        lr *= decay
+        lamda_n *= decay_norm
+        # TODO
+        lamda_d *= decayD
+
+        ''' ------------------------每轮覆盖存储loss/acc>>>>>>>>>>>>>>>>>>>>>>>> '''
+        # n轮K个客户端的loss与acc,无需存储
+        # save_pkl(loss_hist, "loss", "g_"+file_name)
+        # save_pkl(acc_hist, "acc", "g_"+file_name)
+        # save_pkl(p_loss_hist, "loss", "p_"+file_name)
+        # save_pkl(p_acc_hist, "acc", "p_"+file_name)
+        
+        # 全局平均loss/acc
+        save_pkl(server_loss_hist, "server_loss", "gloss_"+file_name)
+        save_pkl(server_acc_hist, "server_acc", "gacc_"+file_name)
+        save_pkl(p_server_loss_hist, "server_loss", "ploss_"+file_name)
+        save_pkl(p_server_acc_hist, "server_acc", "pacc_"+file_name)
+        ''' <<<<<<<<<<<<<<<<<<<<<<<<每轮覆盖存储loss/acc------------------------ '''
+    ''' <<<<<<<<<<<<<<<<<<<<<<<<完整训练------------------------ '''
+
+    # 训练结束时存储实验数据
+    save_pkl(server_loss_hist, "server_loss", "gloss_"+file_name)
+    save_pkl(server_acc_hist, "server_acc", "gacc_"+file_name)
+    save_pkl(p_server_loss_hist, "server_loss", "ploss_"+file_name)
+    save_pkl(p_server_acc_hist, "server_acc", "pacc_"+file_name)
 
     # 存储最终模型
     torch.save(

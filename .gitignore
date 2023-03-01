@@ -1,10 +1,10 @@
 saved_exp_info/
 saved_exp_info_bak/
 saved_exp_info_0/
-pic/
 experiments_info/
+experiments_res/
 data/
 .ipynb_checkpoints/
-py_func/__pycache__/
 .idea/
+py_func/__pycache__/
 *.ipynb
