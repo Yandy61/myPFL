@@ -1,0 +1,19 @@
+save_exp_info/
+save_exp_info_bak/
+save_exp_info_0/
+pic/
+experiments_info/
+<<<<<<< HEAD
+<<<<<<< HEAD
+!data/*.pkl
+data/
+=======
+data/*/
+data/*.gz
+>>>>>>> 23fc992... second commit
+=======
+data/
+>>>>>>> 7e71ab1... second commit
+.ipynb_checkpoints/
+.idea/
+*.ipynb
