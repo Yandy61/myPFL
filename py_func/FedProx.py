@@ -9,6 +9,7 @@ from copy import deepcopy
 import random
 from datetime import datetime
 import math
+import os
 
 from py_func.clustering import get_gradients, get_grad, get_similarity
 import py_func.personal_func as pf
@@ -295,7 +296,7 @@ def FedALP(
         previous_global_model = deepcopy(model) # 上一轮的全局模型
 
         clients_params = []     # 当前轮次 所有客户端模型参数（占内存）
-        clients_models = []     # 当前轮次 所有客户端模型
+        clients_models = []
         sampled_clients_for_grad = []   # 存储梯度的客户端列表
 
         ''' ------------------------预热阶段>>>>>>>>>>>>>>>>>>>>>>>> '''
@@ -321,8 +322,8 @@ def FedALP(
                     tens_param.detach() for tens_param in list_params
                 ]
 
+                clients_models.append(deepcopy(local_model))  # 存入当前轮次客户端模型列表
                 clients_params.append(list_params)  # 存入当前轮次客户端模型参数列表
-                clients_models.append(deepcopy(local_model))    # 存入当前轮次客户端模型列表
                 sampled_clients_for_grad.append(k)  # 参与训练的客户端下标存入列表
 
         ''' <<<<<<<<<<<<<<<<<<<<<<<<预热阶段------------------------ '''
@@ -382,9 +383,6 @@ def FedALP(
 
             ''' <<<<<<<<<<<<<<<<<<<<<<<<分组初始化阶段------------------------ '''
 
-            # print(f"========>>> 第{i+1}轮(分组)")
-            # for k in sample_clients(distri_clusters):
-
             if local_test:
                 # 3.回发给各簇，加权融合 //已修正，该过程应在测试过acc、loss后进行，在每轮训练前开始
                 clusters_model = pf.cluster_aggregation_process(
@@ -410,9 +408,9 @@ def FedALP(
                 list_params = [
                     tens_param.detach() for tens_param in list_params
                 ]
-
+    
+                clients_models.append(deepcopy(local_model))  # 存入当前轮次客户端模型列表
                 clients_params.append(list_params)  # 存入当前轮次客户端模型参数列表
-                clients_models.append(deepcopy(local_model))    # 存入当前轮次客户端模型列表
                 sampled_clients_for_grad.append(k)  # 参与训练的客户端下标存入列表
         ''' <<<<<<<<<<<<<<<<<<<<<<<<个性化训练阶段------------------------ '''
 
@@ -535,10 +533,11 @@ def FedALP(
                 )
         ''' <<<<<<<<<<<<<<<<<<<<<<<<分组后聚合------------------------ '''
 
-        # 更新最新梯度gradients
-        gradients = get_gradients(
-            previous_global_model, clients_params
-        )
+        # 更新Tpre前的梯度gradients
+        if i == pre_train-1:
+            gradients = get_gradients(
+                previous_global_model, clients_models
+            )
 
         # 学习率衰减
         if(i >= pre_train):
@@ -872,7 +871,7 @@ def pFedGLAO(
     lamda_d=0.0,
     lamda_n=0.0,
     decay_norm=1.0,
-    decayD,
+    decayD=1.0,
     n_clusters=10,
     decayP=1.0,
     local_test=False,
@@ -969,7 +968,7 @@ def pFedGLAO(
     print("========>>> 初始化完成")
     
 
-''' ------------------------完整训练>>>>>>>>>>>>>>>>>>>>>>>> '''
+    ''' ------------------------完整训练>>>>>>>>>>>>>>>>>>>>>>>> '''
     # 全局轮次循环
     for i in range(n_iter):
 
@@ -978,12 +977,12 @@ def pFedGLAO(
         previous_global_model = deepcopy(model)     # 上一轮的全局模型
 
         clients_params = []     # 当前轮次 所有客户端模型参数（占内存）
+        clients_models = []
         sampled_clients_for_grad = []   # 存储梯度的客户端列表
 
         ''' ------------------------预热阶段>>>>>>>>>>>>>>>>>>>>>>>> '''
         # 分组前训练
         if i < pre_train:
-            # print(f"========>>> 第{i+1}轮(未分组)")
 
             # 将香农指数以权重形式影响聚合
             shannon_weights = lamda_d * shannon_list / np.sum(shannon_list) + (1-lamda_d) * weights
@@ -1010,6 +1009,7 @@ def pFedGLAO(
                     tens_param.detach() for tens_param in list_params
                 ]
 
+                clients_models.append(deepcopy(local_model))  # 存入当前轮次客户端模型列表
                 clients_params.append(list_params)  # 存入当前轮次客户端模型参数列表
                 sampled_clients_for_grad.append(k)  # 参与训练的客户端下标存入列表
 
@@ -1023,6 +1023,7 @@ def pFedGLAO(
             ''' ------------------------分组初始化阶段>>>>>>>>>>>>>>>>>>>>>>>> '''
             if i == pre_train :
                 # 分组的那一轮进行初始化
+                lr = lr * decay
                 decay = decayP
 
                 # 保存预训练模型
@@ -1031,8 +1032,6 @@ def pFedGLAO(
                 )
                 # TODO:保存梯度信息
                 save_pkl(gradients, "gradPre", file_name + "_grad")
-                
-                print("========>>> 分组信息初始化")
                 
                 ''' //////////////////////分组一次,不然簇id会乱///////////////////////////'''
                 from scipy.cluster.hierarchy import linkage, fcluster
@@ -1074,9 +1073,6 @@ def pFedGLAO(
                     grads.append(deepcopy(grad))
             ''' <<<<<<<<<<<<<<<<<<<<<<<<分组初始化阶段------------------------ '''
 
-            # print(f"========>>> 第{i+1}轮(分组)")
-            # for k in sample_clients(distri_clusters):
-
             if local_test:
                 # 3.回发给各簇，加权融合 //已修正，该过程应在测试过acc、loss后进行，在每轮训练前开始
                 clusters_model = pf.cluster_aggregation_process(
@@ -1111,15 +1107,14 @@ def pFedGLAO(
                     tens_param.detach() for tens_param in list_params
                 ]
 
+                clients_models.append(deepcopy(local_model))  # 存入当前轮次客户端模型列表
                 clients_params.append(list_params)  # 存入当前轮次客户端模型参数列表
-                clients_models.append(deepcopy(local_model))    # 存入当前轮次客户端模型列表
                 sampled_clients_for_grad.append(k)  # 参与训练的客户端下标存入列表
         ''' <<<<<<<<<<<<<<<<<<<<<<<<个性化训练阶段------------------------ '''
 
 
         ''' ------------------------分组前聚合>>>>>>>>>>>>>>>>>>>>>>>> '''
         if i < pre_train:
-            # print("========>>> 聚合(未分组)")
             
             # 更新全局模型
             model = FedAvg_agregation_process(
@@ -1146,21 +1141,20 @@ def pFedGLAO(
                 server_acc_hist.append(server_acc)                  # 所有轮，全局平均 acc
 
             nowtime = datetime.now()    # 记录当前时间
+            t0 = str(nowtime - i_time)[2:7]
             if i % metric_period == 0:
                 t = str(nowtime - starttime).split(".")[0]
                 print(
-                    f"========>>> 第{i+1}轮:   Loss: {server_loss}    Server Test Accuracy: {server_acc}   —>Time: {t}"
+                    f"\r====>>> {i+1}/{n_iter}:  Iter - {t0}   Loss: {server_loss:.3f}   Acc: {server_acc:.3f}   —>Time - {t}", end = ""
                 )
             else:
-                t = str(nowtime - i_time).split(".")[0]
                 print(
-                    f"========>>> 第{i+1}轮:   Done  IterTime: {t}"
+                    f"\r====>>> {i+1}/{n_iter}:  Iter - {t0}", end = ""
                 )
         ''' <<<<<<<<<<<<<<<<<<<<<<<<分组前聚合------------------------ '''
         
         ''' ------------------------分组后聚合>>>>>>>>>>>>>>>>>>>>>>>> '''
         if i >= pre_train:
-            # print("========>>> 聚合(分组)")
 
             ''' //////////////////////新的聚合方案////////////////////// '''
             # 1.每个簇内模型FedAvg聚合
@@ -1223,30 +1217,29 @@ def pFedGLAO(
                 p_server_acc_hist.append(p_server_acc)      # 所有轮，组模型 acc 全局平均
                 
             nowtime = datetime.now()
+            t0 = str(nowtime - i_time)[2:7]
             if i % metric_period == 0:
                 t = str(nowtime-starttime).split(".")[0]
                 print(
-                    f"========>>> 第{i+1}轮(分组):   Loss: {server_loss}    Server Test Accuracy: {server_acc}"
-                )
-                print(
-                    f"========>>> 第{i+1}轮(分组): p_Loss: {p_server_loss}  p_Server Test Accuracy: {p_server_acc}   —>Time: {t}"
+                    f"\r====>>> {i+1}/{n_iter}:  Iter - {t0}  Loss: {server_loss}  Acc: {server_acc}  p_Loss: {p_server_loss}  p_Acc: {p_server_acc}  —>Time - {t}", end = ""
                 )
             else:
-                t = str(nowtime-i_time).split(".")[0]
                 print(
-                    f"========>>> 第{i+1}轮(分组):   Done  IterTime: {t}"
+                    f"\r====>>> {i+1}/{n_iter}:  Iter - {t0}", end = ""
                 )
         ''' <<<<<<<<<<<<<<<<<<<<<<<<分组后聚合------------------------ '''
 
-        # 更新最新梯度gradients
-        gradients = get_gradients(
-            previous_global_model, clients_params
-        )
+        # 更新Tpre前的梯度gradients
+        if i == pre_train-1:
+            gradients = get_gradients(
+                previous_global_model, clients_models
+            )
         # 更新总梯度
         grad = get_grad(previous_global_model, model)
 
         # 学习率衰减
-        lr *= decay
+        if i >= pre_train:
+            lr *= decay
         lamda_n *= decay_norm
         # TODO
         lamda_d *= decayD

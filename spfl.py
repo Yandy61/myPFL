@@ -42,21 +42,20 @@ def train_process(filename:str, para:list):
     # 全局轮次、batch_size、acc汇报频率
     # n_iter, batch_size, meas_perf_period = get_hyperparams(dataset, n_SGD)
 
-    print("==========>>> 超参数 <<<========")
-    print("  全局轮次: ", n_iter)
-    print("  本地轮次: ", n_SGD)
-    print("  batch size: ", batch_size)
-    print("  学习率: ", lr)
-    print("  decay: ", decay)
-    print("  mu: ", mu)
-    print("  lamda_d: ", lamda_d)
-
-    print("===============================")
-
     """用于保存数据的文件名"""
     file_name = (
         f"{dataset}_{mod}_lr{lr}_{decay}_{decayP}_ld{lamda_d}_{decayD}_ln{lamda_n}_{decayN}_iter{n_iter}_{pre_train}_{filename}"
     )
+
+    print("==========>>> 超参数 <<<========")
+    print("  全局轮次: ", n_iter)
+    print("  Pre轮次: ", pre_train)
+    print("  本地轮次: ", n_SGD)
+    print("  batch size: ", batch_size)
+    print("  汇报频率: ", meas_perf_period)
+    print("  个性化系数: ", beta)
+    print("  文件名: ", file_name)
+    print("===============================")
 
 
     """获取数据集"""
@@ -74,7 +73,7 @@ def train_process(filename:str, para:list):
 
     """加载初始模型"""
     model_0 = load_model(mod, seed)
-    print(f"模型加载完成：{model_0}")
+    print(f"模型加载完成：{mod}")
 
 
     if not os.path.exists(f"saved_exp_info/acc/{file_name}.pkl") or force:
@@ -106,7 +105,7 @@ def train_process(filename:str, para:list):
         )
 
 
-    print("EXPERIMENT IS FINISHED")
+    print("\nEXPERIMENT IS FINISHED")
 
 
 if __name__ == '__main__':
