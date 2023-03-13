@@ -7,4 +7,3 @@ data/
 .ipynb_checkpoints/
 .idea/
 py_func/__pycache__/
-*.ipynb
