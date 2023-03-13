@@ -115,4 +115,3 @@ if __name__ == '__main__':
         train_process(filename, paras)
 
     print("All Done!")
-    

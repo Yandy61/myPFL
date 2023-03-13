@@ -296,7 +296,7 @@ def FedALP(
         previous_global_model = deepcopy(model) # 上一轮的全局模型
 
         clients_params = []     # 当前轮次 所有客户端模型参数（占内存）
-        clients_models = []
+        clients_models = []     # 当前轮次 所有客户端模型
         sampled_clients_for_grad = []   # 存储梯度的客户端列表
 
         ''' ------------------------预热阶段>>>>>>>>>>>>>>>>>>>>>>>> '''
@@ -382,7 +382,6 @@ def FedALP(
                 )
 
             ''' <<<<<<<<<<<<<<<<<<<<<<<<分组初始化阶段------------------------ '''
-
             if local_test:
                 # 3.回发给各簇，加权融合 //已修正，该过程应在测试过acc、loss后进行，在每轮训练前开始
                 clusters_model = pf.cluster_aggregation_process(
@@ -408,7 +407,7 @@ def FedALP(
                 list_params = [
                     tens_param.detach() for tens_param in list_params
                 ]
-    
+
                 clients_models.append(deepcopy(local_model))  # 存入当前轮次客户端模型列表
                 clients_params.append(list_params)  # 存入当前轮次客户端模型参数列表
                 sampled_clients_for_grad.append(k)  # 参与训练的客户端下标存入列表
@@ -840,6 +839,7 @@ def pFedLDGD(
     # 训练结束时存储实验数据
     # save_pkl(loss_hist, "loss", file_name)
     # save_pkl(acc_hist, "acc", file_name)
+
     
     save_pkl(server_loss_hist, "server_loss", file_name)
     save_pkl(server_acc_hist, "server_acc", file_name)
@@ -850,8 +850,6 @@ def pFedLDGD(
     )
 
     return model, loss_hist, acc_hist
-
-
 
 
 def pFedGLAO(
