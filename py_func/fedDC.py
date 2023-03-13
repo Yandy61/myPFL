@@ -1,5 +1,8 @@
-from FedProx import *
+from .FedProx import *
 import copy
+
+# GPU选择
+device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
 def feddc(
     model,
@@ -12,7 +15,6 @@ def feddc(
     file_name: str,
     decay=1.0,
     metric_period=1,
-    mu=0.0,
     alpha_coef=0.0
 ):
     """基于标签多样性与梯度方向的个性化联邦学习
@@ -34,8 +36,6 @@ def feddc(
 
     print("========>>> 正在初始化训练")
 
-    # GPU选择
-    device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
     model.to(device)  # 移动模型到cuda
     print(f"模型放入{device}")
 
@@ -80,15 +80,27 @@ def feddc(
     dc_server_acc_hist.append(server_acc)
 
     '''********************************************************************'''
+    
+    n_par = len(get_mdl_params([model])[0])
+
     weight_list = weights * K
 
     # list(K) ,上一轮的梯度列表, 参数类型
     gradients = get_gradients(model, [model] * K)
     
-    # h_i
-    parameter_drifts = copy.deepcopy(gradients)
+    # # h_i
+    # parameter_drifts = copy.deepcopy(gradients)
+    # 创建一个形状为(n_clnt, n_par)的数组，用于存储每个客户端的模型参数漂移值
+    parameter_drifts = np.zeros((K, n_par)).astype('float32')
+    
+    # 获取初始模型的参数列表
+    init_par_list=get_mdl_params([model], n_par)[0]
+    # 创建一个形状为(n_clnt, n_par)的数组，用于存储每个客户端的模型参数，并将其初始化为初始模型的参数
+    clnt_params_list  = np.ones(K).astype('float32').reshape(-1, 1) * init_par_list.reshape(1, -1)
 
-    state_gadient_diffs = get_gradients(model, [model] * K+1)
+    # 创建一个形状为(n_clnt+1, n_par)的数组，用于存储每个客户端和云端的状态梯度差异
+    state_gadient_diffs = np.zeros((K+1, n_par)).astype('float32') #including cloud state
+    # state_gadient_diffs = get_gradients(model, [model] * (K+1))
     
     # # 上一轮的总梯度，模型类型
     # grad = get_grad(model, model)
@@ -108,11 +120,13 @@ def feddc(
 
         # previous_global_model = deepcopy(model)     # 上一轮的全局模型
 
-        global_model_param = get_model_para(model)
-        delta_g_sum = np.array(global_model_param - global_model_param)
+        # global_model_param = get_model_para(model)
+        global_model_param = get_mdl_params([model], n_par)[0]
+        
+        delta_g_sum = np.zeros(n_par)
 
         clients_params = []     # 当前轮次 所有客户端模型参数（占内存）
-        # clients_models = []     # 当前轮次 所有客户端模型
+        clients_models = []     # 当前轮次 所有客户端模型
 
         # 根据轮次选择参与训练的客户 依据 聚合时的权重
         clients_list = np.arange(K)
@@ -121,7 +135,11 @@ def feddc(
         ''' ------------------------训练阶段>>>>>>>>>>>>>>>>>>>>>>>> '''
         # print(f"========>>> 第{i+1}轮(未分组)")
         for k in clients_list:
-            print(f"---Training client {k}")
+            client_index = '{:>{width}}'.format(k, width=2)
+            nowtime = datetime.now()    # 记录当前时间
+            t0 = str(nowtime - i_time)[2:7]
+            print(
+                f"\r====>>> {i+1}/{n_iter}:  Iter - {t0} - {client_index}", end = "")
 
             local_model = deepcopy(model)
             local_optimizer = optim.SGD(local_model.parameters(), lr=lr)
@@ -130,7 +148,7 @@ def feddc(
             local_update_last = state_gadient_diffs[k]
             global_update_last = state_gadient_diffs[-1]/weight_list[k]
             alpha = alpha_coef / weight_list[k]
-            h_i_k = parameter_drifts[k]
+            hist_i = torch.tensor(parameter_drifts[k], dtype=torch.float32, device=device) #h_i
             '''***********************************************'''
 
             ''' DONE: 修改本地优化函数，需考虑本地模型与全局模型的更新方向 '''
@@ -144,7 +162,8 @@ def feddc(
                 lr,
                 global_update_last,
                 local_update_last,
-                h_i_k
+                hist_i,
+                n_par
             )
 
             # 当前客户端最新模型参数
@@ -154,7 +173,8 @@ def feddc(
             ]
             
             '''***********************************************'''
-            delta_param_curr = list_params - global_model_param
+            cur_client_params = get_mdl_params([local_model], n_par)[0]
+            delta_param_curr = cur_client_params - global_model_param
             parameter_drifts[k] += delta_param_curr
             
             # ?????
@@ -165,6 +185,8 @@ def feddc(
             delta_g_sum += delta_g_cur
             state_gadient_diffs[k] = state_g
 
+            # 更新本地模型参数
+            clnt_params_list[k] = cur_client_params 
             '''***********************************************'''
 
             clients_params.append(list_params)  # 存入当前轮次客户端模型参数列表
@@ -178,7 +200,8 @@ def feddc(
         )
 
         '''***********************************************'''
-        avg_mdl_param_sel = get_model_para(avgmodel)
+        # avg_mdl_param_sel = get_model_para(avgmodel)
+        avg_mdl_param_sel = get_mdl_params([avgmodel],n_par)[0]
 
         delta_g_cur = 1 / K * delta_g_sum
 
@@ -220,15 +243,15 @@ def feddc(
             dc_server_acc_hist.append(dc_server_acc)                  # 所有轮，全局平均 acc
 
         nowtime = datetime.now()    # 记录当前时间
+        t0 = str(nowtime - i_time)[2:7]
         if i % metric_period == 0:
             t = str(nowtime - starttime).split(".")[0]
             print(
-                f"========>>> 第{i+1}轮:   Loss: {dc_server_loss}    Server Test Accuracy: {dc_server_acc}   —>Time: {t}"
+                f"\r====>>> {i+1}/{n_iter}:  Iter - {t0}      Loss: {dc_server_loss:.3f}   Acc: {dc_server_acc:.3f}   —>Time - {t}", end = ""
             )
         else:
-            t = str(nowtime - i_time).split(".")[0]
             print(
-                f"========>>> 第{i+1}轮:   Done  IterTime: {t}"
+                f"\r====>>> {i+1}/{n_iter}:  Iter - {t0}", end = ""
             )
         ''' <<<<<<<<<<<<<<<<<<<<<<<<聚合------------------------ '''
 
@@ -282,6 +305,23 @@ def get_model_para(model, flag=True):
 
     return list_params
 
+def get_mdl_params(model_list, n_par=None):
+    
+    if n_par==None:
+        exp_mdl = model_list[0]
+        n_par = 0
+        for name, param in exp_mdl.named_parameters():
+            n_par += len(param.data.reshape(-1))
+    
+    param_mat = np.zeros((len(model_list), n_par)).astype('float32')
+    for i, mdl in enumerate(model_list):
+        idx = 0
+        for name, param in mdl.named_parameters():
+            temp = param.data.cpu().numpy().reshape(-1)
+            param_mat[i, idx:idx + len(temp)] = temp
+            idx += len(temp)
+    return np.copy(param_mat)
+
 def fedDC_local_learning(
         model,
         alpha: float,
@@ -290,9 +330,10 @@ def fedDC_local_learning(
         n_SGD: int,
         loss_f,
         lr,
-        grad_global_pre:list,
-        grad_local_pre:list,
-        h_i_k:list
+        grad_global_pre,
+        grad_local_pre,
+        hist_i,
+        n_par
     ):
 
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
@@ -300,9 +341,9 @@ def fedDC_local_learning(
     model.to(device)  # 移动模型到cuda
     model_0 = deepcopy(model)
 
-    global_model_param = torch.tensor(get_model_para(model_0), dtype=torch.float32, device=device)
-    hist_i = torch.tensor(h_i_k, dtype=torch.float32, device=device)
-    state_update_diff = torch.tensor(-grad_local_pre+ grad_global_pre,  dtype=torch.float32, device=device)
+    state_update_diff = torch.tensor(-grad_local_pre + grad_global_pre,  dtype=torch.float32, device=device)
+
+    global_model_param = torch.tensor(get_mdl_params([model_0],n_par)[0], dtype=torch.float32, device=device)
 
 
     for _ in range(n_SGD):
@@ -319,10 +360,15 @@ def fedDC_local_learning(
 
         batch_loss = loss_f(predictions, labels)
 
-        local_model_para = list(model.parameters())
+        local_parameter = None
+        for param in model.parameters():
+            if not isinstance(local_parameter, torch.Tensor):
+                local_parameter = param.reshape(-1)
+            else:
+                local_parameter = torch.cat((local_parameter, param.reshape(-1)), 0)
 
-        loss_r = alpha/2 * torch.sum((local_model_para - (global_model_param - hist_i))*(local_model_para - (global_model_param - hist_i)))
-        loss_g = torch.sum(local_model_para * state_update_diff) / (lr * n_SGD)
+        loss_r = alpha/2 * torch.sum((local_parameter - (global_model_param - hist_i))*(local_parameter - (global_model_param - hist_i)))
+        loss_g = torch.sum(local_parameter * state_update_diff) / (lr * n_SGD)
         
         batch_loss = batch_loss + loss_r + loss_g
 
@@ -331,13 +377,13 @@ def fedDC_local_learning(
 
 def set_param_to_model(model, model_param):
     """ 根据权重进行FedAvg聚合 """
-
-    new_model = deepcopy(model)
-    for layer_weigths in new_model.parameters():
-        layer_weigths.data.sub_(layer_weigths.data)
-
-    for idx, layer_weights in enumerate(new_model.parameters()):
-        contribution = model_param.data
-        layer_weights.data.add_(contribution)
-
-    return new_model
+    dict_param = copy.deepcopy(dict(model.named_parameters()))
+    idx = 0
+    for name, param in model.named_parameters():
+        weights = param.data
+        length = len(weights.reshape(-1))
+        dict_param[name].data.copy_(torch.tensor(model_param[idx:idx+length].reshape(weights.shape)).to(device))
+        idx += length
+    
+    model.load_state_dict(dict_param)    
+    return model
