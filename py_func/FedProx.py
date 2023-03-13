@@ -875,7 +875,9 @@ def pFedGLAO(
     n_clusters=10,
     decayP=1.0,
     local_test=False,
-    beta=0.6
+    beta=0.6,
+    p_grad=[],
+    pattern=0
 ):
     """全局与局部动态优化的个性化联邦学习
     Parameters:
@@ -898,6 +900,8 @@ def pFedGLAO(
         - `decay1`: 分组后学习衰减率    #
         - `local_test`: 本地模型测试方法    #
         - `beta`: 个性化系数    #
+        - `p_grad`: 上一轮梯度
+        - `pattern`: 模式切换 0：完整训练 1：仅分组后
 
     returns :
         - `model`: 最终的全局模型
@@ -967,10 +971,18 @@ def pFedGLAO(
 
     print("========>>> 初始化完成")
     
+    # 仅分组后训练时，预置grad
+    if pattern == 1:
+        gradients = p_grad
+        print(f"跳过前{pre_train}轮训练...")
 
     ''' ------------------------完整训练>>>>>>>>>>>>>>>>>>>>>>>> '''
     # 全局轮次循环
     for i in range(n_iter):
+        # 跳过前面轮次
+        if pattern == 1 and i < pre_train :
+            # print(f"\r ===> {i}/{n_iter} skip", end="")
+            continue
 
         i_time = datetime.now()     # 记录当前轮次开始时间
 
@@ -1026,12 +1038,13 @@ def pFedGLAO(
                 lr = lr * decay
                 decay = decayP
 
-                # 保存预训练模型
-                torch.save(
-                    model.state_dict(), f"saved_exp_info/final_model/pre_{pre_train}.pth"
-                )
-                # TODO:保存梯度信息
-                save_pkl(gradients, "gradPre", file_name + "_grad")
+                if pattern == 0:
+                    # 保存预训练模型
+                    torch.save(
+                        model.state_dict(), f"experiments_res/final_model/{file_name}_pre{pre_train}.pth"
+                    )
+                    # TODO:保存梯度信息
+                    save_pkl(gradients, "gradPre", file_name + "_grad")
                 
                 ''' //////////////////////分组一次,不然簇id会乱///////////////////////////'''
                 from scipy.cluster.hierarchy import linkage, fcluster
@@ -1083,23 +1096,23 @@ def pFedGLAO(
                     clusters_model[(clusters[k] - 1)])       # 本地模型是所属簇的模型
                 local_optimizer = optim.SGD(local_model.parameters(), lr=lr)
 
-                # local_learning(
-                #     local_model,
-                #     mu,
-                #     local_optimizer,
-                #     training_sets[k],
-                #     n_SGD,
-                #     loss_f,
-                # )
-                direction_local_learning(
+                local_learning(
                     local_model,
-                    grads[(clusters[k] - 1)],
-                    lamda_n,
+                    mu,
                     local_optimizer,
                     training_sets[k],
                     n_SGD,
                     loss_f,
                 )
+                # direction_local_learning(
+                #     local_model,
+                #     grads[(clusters[k] - 1)],
+                #     lamda_n,
+                #     local_optimizer,
+                #     training_sets[k],
+                #     n_SGD,
+                #     loss_f,
+                # )
 
                 # 当前客户端最新模型参数
                 list_params = list(local_model.parameters())
@@ -1221,7 +1234,7 @@ def pFedGLAO(
             if i % metric_period == 0:
                 t = str(nowtime-starttime).split(".")[0]
                 print(
-                    f"\r====>>> {i+1}/{n_iter}:  Iter - {t0}  Loss: {server_loss}  Acc: {server_acc}  p_Loss: {p_server_loss}  p_Acc: {p_server_acc}  —>Time - {t}", end = ""
+                    f"\r====>>> {i+1}/{n_iter}:  Iter - {t0}  Loss: {server_loss:.3f}  Acc: {server_acc:.3f}  p_Loss: {p_server_loss:.3f}  p_Acc: {p_server_acc:.3f}  —>Time - {t}", end = ""
                 )
             else:
                 print(
@@ -1267,7 +1280,7 @@ def pFedGLAO(
 
     # 存储最终模型
     torch.save(
-        model.state_dict(), f"saved_exp_info/final_model/{file_name}.pth"
+        model.state_dict(), f"experiments_res/final_model/{file_name}.pth"
     )
 
     return model, loss_hist, acc_hist
