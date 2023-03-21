@@ -276,6 +276,8 @@ def FedALP(
     # 将初始loss、acc加入记录
     server_loss_hist.append(server_loss)
     server_acc_hist.append(server_acc)
+    p_server_loss_hist.append(server_loss)
+    p_server_acc_hist.append(server_acc)
 
     # list(K) ,上一轮的梯度列表
     gradients = []
@@ -439,8 +441,12 @@ def FedALP(
                 # 记录server的loss、acc
                 server_loss = np.dot(weights, loss_hist[i + 1])     # 当前轮，全局平均 loss
                 server_acc = np.dot(weights, acc_hist[i + 1])       # 当前轮，全局平均 acc
+
                 server_loss_hist.append(server_loss)                # 所有轮，全局平均 loss
                 server_acc_hist.append(server_acc)                  # 所有轮，全局平均 acc
+                
+                p_server_loss_hist.append(server_loss)                # 所有轮，全局平均 loss
+                p_server_acc_hist.append(server_acc)                  # 所有轮，全局平均 acc
 
             nowtime = datetime.now()    # 记录当前时间
             if i % metric_period == 0:

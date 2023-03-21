@@ -116,7 +116,7 @@ def get_clusters_with_alg2(
     linkage_matrix: np.array, n_sampled: int, weights: np.array
 ):
     """Algorithm 2"""
-    epsilon = int(10**5)
+    epsilon = int(10 ** 10)
 
     # associate each client to a cluster
     link_matrix_p = deepcopy(linkage_matrix)

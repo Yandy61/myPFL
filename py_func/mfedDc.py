@@ -4,29 +4,29 @@ import copy
 # GPU选择
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
-# import logging
+import logging
 
-# # 创建一个logger对象，并设置日志记录级别为DEBUG
-# logger = logging.getLogger('my_logger')
-# logger.setLevel(logging.DEBUG)
+# 创建一个logger对象，并设置日志记录级别为DEBUG
+logger = logging.getLogger('my_logger')
+logger.setLevel(logging.DEBUG)
 
-# # 创建一个文件处理器，用于将日志写入指定文件中
-# file_handler = logging.FileHandler('my_log_file.txt')
+# 创建一个文件处理器，用于将日志写入指定文件中
+file_handler = logging.FileHandler('my_log_file.txt')
 
-# # 设置文件处理器的日志记录级别为DEBUG
-# file_handler.setLevel(logging.DEBUG)
+# 设置文件处理器的日志记录级别为DEBUG
+file_handler.setLevel(logging.DEBUG)
 
-# # 创建一个格式化器，用于定义日志的格式
-# formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+# 创建一个格式化器，用于定义日志的格式
+formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 
-# # 将格式化器添加到文件处理器中
-# file_handler.setFormatter(formatter)
+# 将格式化器添加到文件处理器中
+file_handler.setFormatter(formatter)
 
-# # 将文件处理器添加到logger对象中
-# logger.addHandler(file_handler)
+# 将文件处理器添加到logger对象中
+logger.addHandler(file_handler)
 
-# # 将print语句的输出记录到日志文件中
-# logger.debug('This message will be logged to the file')
+# 将print语句的输出记录到日志文件中
+logger.debug('This message will be logged to the file')
 
 def feddc(
     model,
@@ -56,6 +56,10 @@ def feddc(
 
     returns :
         - `model`: 最终的全局模型
+
+    fix:
+        1.去掉weight_list
+
     """
 
     print("========>>> 正在初始化训练")
@@ -107,23 +111,19 @@ def feddc(
     
     n_par = len(get_mdl_params([model])[0])
 
-    weight_list = weights * K
-
     # # list(K) ,上一轮的梯度列表, 参数类型
     # gradients = get_gradients(model, [model] * K)
     
     # # h_i
     # parameter_drifts = copy.deepcopy(gradients)
     # 创建一个形状为(n_clnt, n_par)的数组，用于存储每个客户端的模型参数漂移值
-    parameter_drifts = np.zeros((K, n_par)).astype('float32')
+    clients_parameter_drifts_inAll = np.zeros((K, n_par)).astype('float32')
     
     # 获取初始模型的参数列表
     init_par_list=get_mdl_params([model], n_par)[0]
-    # 创建一个形状为(n_clnt, n_par)的数组，用于存储每个客户端的模型参数，并将其初始化为初始模型的参数
-    clnt_params_list  = np.ones(K).astype('float32').reshape(-1, 1) * init_par_list.reshape(1, -1)
 
     # 创建一个形状为(n_clnt+1, n_par)的数组，用于存储每个客户端和云端的状态梯度差异
-    state_gadient_diffs = np.zeros((K+1, n_par)).astype('float32') #including cloud state
+    last_gadient = np.zeros((K+1, n_par)).astype('float32') #including cloud state
     # state_gadient_diffs = get_gradients(model, [model] * (K+1))
     
     # # 上一轮的总梯度，模型类型
@@ -169,10 +169,10 @@ def feddc(
             local_optimizer = optim.SGD(local_model.parameters(), lr=lr)
 
             '''********************** FedDC ******************'''
-            local_update_last = state_gadient_diffs[k]
-            global_update_last = state_gadient_diffs[-1]/weight_list[k]
-            alpha = alpha_coef / weight_list[k]
-            hist_i = torch.tensor(parameter_drifts[k], dtype=torch.float32, device=device) #h_i
+            local_update_last = last_gadient[k]
+            global_update_last = last_gadient[-1]
+            alpha = alpha_coef
+            hist_i = torch.tensor(clients_parameter_drifts_inAll[k], dtype=torch.float32, device=device) #h_i
             '''***********************************************'''
 
             ''' DONE: 修改本地优化函数，需考虑本地模型与全局模型的更新方向 '''
@@ -201,18 +201,10 @@ def feddc(
             '''***********************************************'''
             cur_client_params = get_mdl_params([local_model], n_par)[0]
             delta_param_curr = cur_client_params - global_model_param
-            parameter_drifts[k] += delta_param_curr
-            
-            # ?????
-            beta = 1/n_SGD/lr
+            clients_parameter_drifts_inAll[k] += delta_param_curr
+            last_gadient[k] = delta_param_curr
+            delta_g_sum += delta_param_curr
 
-            state_g = local_update_last - global_update_last + beta * (-delta_param_curr) 
-            delta_g_cur = (state_g - state_gadient_diffs[k])*weight_list[k]
-            delta_g_sum += delta_g_cur
-            state_gadient_diffs[k] = state_g
-
-            # 更新本地模型参数
-            clnt_params_list[k] = cur_client_params 
             '''***********************************************'''
 
             clients_params.append(list_params)  # 存入当前轮次客户端模型参数列表
@@ -226,15 +218,14 @@ def feddc(
         )
 
         '''***********************************************'''
-        # avg_mdl_param_sel = get_model_para(avgmodel)
         avg_mdl_param_sel = get_mdl_params([avgmodel],n_par)[0]
 
         delta_g_cur = 1 / K * delta_g_sum
 
-        state_gadient_diffs[-1] += delta_g_cur 
+        last_gadient[-1] = delta_g_cur 
 
         # 加上了hi的全局模型？
-        cld_mdl_param = avg_mdl_param_sel + np.mean(parameter_drifts, axis=0) #
+        cld_mdl_param = avg_mdl_param_sel + np.mean(clients_parameter_drifts_inAll, axis=0) #
 
         # TODO cld_mdl_param加载到模型中，DC全局模型，cloud模型
         model = set_param_to_model(model,cld_mdl_param)
@@ -369,7 +360,7 @@ def fedDC_local_learning(
     model.to(device)  # 移动模型到cuda
     model_0 = deepcopy(model)
 
-    state_update_diff = torch.tensor(-grad_local_pre + grad_global_pre,  dtype=torch.float32, device=device)
+    state_update_diff = torch.tensor(grad_local_pre - grad_global_pre,  dtype=torch.float32, device=device)
 
     global_model_param = torch.tensor(get_mdl_params([model_0],n_par)[0], dtype=torch.float32, device=device)
 
@@ -396,13 +387,13 @@ def fedDC_local_learning(
                 local_parameter = torch.cat((local_parameter, param.reshape(-1)), 0)
 
         loss_r = alpha/2 * torch.sum((local_parameter - (global_model_param - hist_i))*(local_parameter - (global_model_param - hist_i)))
-        loss_g = torch.sum(local_parameter * state_update_diff)
+        loss_g = torch.sum(local_parameter * state_update_diff)*0.5
         '''
         3.13 18:47  此处loss_g 与论文不同，按论文的方法造成无法收敛，现修改为源码中计算方法。
         '''
 
-        batch_loss = batch_loss + loss_r + loss_g
-        # batch_loss = batch_loss + loss_r
+        # batch_loss = batch_loss + loss_r + loss_g
+        batch_loss = batch_loss + loss_r
 
         batch_loss.backward()
         optimizer.step()

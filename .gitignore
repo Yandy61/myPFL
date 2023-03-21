@@ -1,8 +1,9 @@
 saved_exp_info/
 saved_exp_info_bak/
 saved_exp_info_0/
-experiments_info/
-experiments_res/
+*.pkl
+*.pth
+*.txt
 data/
 .ipynb_checkpoints/
 .idea/
