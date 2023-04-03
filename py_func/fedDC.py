@@ -39,7 +39,9 @@ def feddc(
     file_name: str,
     decay=1.0,
     metric_period=1,
-    alpha_coef=0.0
+    alpha_coef=0.0,
+    mu=0.5,
+    dmu=0.998
 ):
     """基于标签多样性与梯度方向的个性化联邦学习
     Parameters:
@@ -183,7 +185,7 @@ def feddc(
                 training_sets[k],
                 n_SGD,
                 loss_f,
-                lr,
+                mu,
                 global_update_last,
                 local_update_last,
                 hist_i,
@@ -292,7 +294,7 @@ def feddc(
 
         # 学习率衰减
         lr *= decay
-
+        mu *= dmu
         ''' ------------------------每轮覆盖存储loss/acc>>>>>>>>>>>>>>>>>>>>>>>> '''
         # n轮K个客户端的loss与acc,无需存储
         # save_pkl(loss_hist, "loss", file_name)
@@ -355,7 +357,7 @@ def fedDC_local_learning(
         train_data,
         n_SGD: int,
         loss_f,
-        lr,
+        mu,
         grad_global_pre,
         grad_local_pre,
         hist_i,
@@ -401,7 +403,7 @@ def fedDC_local_learning(
         3.13 18:47  此处loss_g 与论文不同，按论文的方法造成无法收敛，现修改为源码中计算方法。
         '''
 
-        batch_loss = batch_loss + loss_r + loss_g
+        batch_loss = batch_loss + loss_r + mu * loss_g
         # batch_loss = batch_loss + loss_r
 
         batch_loss.backward()

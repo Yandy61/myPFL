@@ -18,6 +18,8 @@ def train_process(filename:str, para:list):
     decay = float(para[3])      # 分组衰减
     n_iter = int(para[4])       # 总轮次
     alpha_coef = float(para[5])
+    mu = float(para[6])
+    dmu = float(para[7])
 
     # 内置默认参数
     seed = 0                # 模型种子
@@ -25,7 +27,7 @@ def train_process(filename:str, para:list):
     p = 1.0                 # 选取比例
     batch_size = 50         # batch_size
     meas_perf_period = 5    # 汇报频率
-
+    da = 0.998
 
     """获取超参数"""
     # 全局轮次、batch_size、acc汇报频率
@@ -33,7 +35,7 @@ def train_process(filename:str, para:list):
 
     """用于保存数据的文件名"""
     file_name = (
-        f"mfedDC_{dataset}_{mod}_lr{lr}_d{decay}_iter{n_iter}_{filename}"
+        f"mfedDC_{dataset}_{mod}_lr{lr}_d{decay}_iter{n_iter}_alpha{alpha_coef}_da{da}_mu{mu}_dmu{dmu}_lg_{filename}"
     )
 
     print("==========>>> FedDC 超参数 <<<========")
@@ -77,7 +79,10 @@ def train_process(filename:str, para:list):
         file_name,          # pkl存储名
         decay,              # 分组时学习率衰减
         meas_perf_period,   # 修改meas_perf_period, acc汇报频率
-        alpha_coef          # fedDC 正则系数
+        alpha_coef,         # fedDC 正则系数
+        mu,
+        dmu,
+        da
     )
 
 

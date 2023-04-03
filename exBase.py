@@ -33,7 +33,7 @@ def train_process(filename:str, para:list):
 
     """用于保存数据的文件名"""
     file_name = (
-        f"mu{mu}_fedCS_{dataset}_{mod}_lr{lr}_d{decay}_p{p}_iter{n_iter}_{filename}"
+        f"fedavg_{dataset}_{mod}_lr{lr}_d{decay}_mu{mu}_p{p}_iter{n_iter}_{filename}"
     )
 
     print("==========>>> FedDC 超参数 <<<========")

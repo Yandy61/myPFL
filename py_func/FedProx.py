@@ -174,14 +174,15 @@ def direction_local_learning(model, pre_grad, lamda: float, optimizer, train_dat
     
         # 损失函数惩罚项
         # cur_grad = get_grad(model_0, model)
-        loss_cosin = grad_similarity(pre_grad, model_0, model)
+        loss_cosin = grad_similarity(pre_grad, model_0, model) * lamda
+        t = batch_loss
         
-        # print(f"loss_cosin:{loss_cosin}")
-        
-        batch_loss += lamda * loss_cosin
+        batch_loss += loss_cosin
 
         batch_loss.backward()
         optimizer.step()
+
+    print(f"\rbl:{t:.3f} cl:{loss_cosin:.3f}", end = '')
 
 
 def save_pkl(dictionnary, directory, file_name):
@@ -813,12 +814,12 @@ def pFedLDGD(
         if i % metric_period == 0:
             t = str(nowtime - starttime).split(".")[0]
             print(
-                f"========>>> 第{i+1}轮:   Loss: {server_loss}    Server Test Accuracy: {server_acc}   —>Time: {t}"
+                f"\r=====================>>> 第{i+1}轮: Loss: {server_loss:.3f}  Server Test Accuracy: {server_acc:.3f}   —>Time: {t}", end = ''
             )
         else:
             t = str(nowtime - i_time).split(".")[0]
             print(
-                f"========>>> 第{i+1}轮:   Done  IterTime: {t}"
+                f"\r=====================>>> 第{i+1}轮-", end = ''
             )
         ''' <<<<<<<<<<<<<<<<<<<<<<<<聚合------------------------ '''
 
@@ -1154,8 +1155,12 @@ def pFedGLAO(
                 # 记录server的loss、acc
                 server_loss = np.dot(weights, loss_hist[i + 1])     # 当前轮，全局平均 loss
                 server_acc = np.dot(weights, acc_hist[i + 1])       # 当前轮，全局平均 acc
+
                 server_loss_hist.append(server_loss)                # 所有轮，全局平均 loss
                 server_acc_hist.append(server_acc)                  # 所有轮，全局平均 acc
+
+                p_server_loss_hist.append(server_loss)                # 所有轮，全局平均 loss
+                p_server_acc_hist.append(server_acc)                  # 所有轮，全局平均 acc
 
             nowtime = datetime.now()    # 记录当前时间
             t0 = str(nowtime - i_time)[2:7]

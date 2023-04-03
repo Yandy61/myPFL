@@ -198,8 +198,8 @@ def mlb_training(
         n_SGD: int, 
         loss_f, 
         select_level=-1, 
-        lambda1=1,
-        lambda2=1,
+        lambda1=0.5,
+        lambda2=0.5,
         temperature=1
     ):
 

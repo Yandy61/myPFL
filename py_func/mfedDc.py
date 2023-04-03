@@ -6,27 +6,27 @@ device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
 import logging
 
-# 创建一个logger对象，并设置日志记录级别为DEBUG
-logger = logging.getLogger('my_logger')
-logger.setLevel(logging.DEBUG)
+# # 创建一个logger对象，并设置日志记录级别为DEBUG
+# logger = logging.getLogger('my_logger')
+# logger.setLevel(logging.DEBUG)
 
-# 创建一个文件处理器，用于将日志写入指定文件中
-file_handler = logging.FileHandler('my_log_file.txt')
+# # 创建一个文件处理器，用于将日志写入指定文件中
+# file_handler = logging.FileHandler('my_log_file.txt')
 
-# 设置文件处理器的日志记录级别为DEBUG
-file_handler.setLevel(logging.DEBUG)
+# # 设置文件处理器的日志记录级别为DEBUG
+# file_handler.setLevel(logging.DEBUG)
 
-# 创建一个格式化器，用于定义日志的格式
-formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+# # 创建一个格式化器，用于定义日志的格式
+# formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 
-# 将格式化器添加到文件处理器中
-file_handler.setFormatter(formatter)
+# # 将格式化器添加到文件处理器中
+# file_handler.setFormatter(formatter)
 
-# 将文件处理器添加到logger对象中
-logger.addHandler(file_handler)
+# # 将文件处理器添加到logger对象中
+# logger.addHandler(file_handler)
 
-# 将print语句的输出记录到日志文件中
-logger.debug('This message will be logged to the file')
+# # 将print语句的输出记录到日志文件中
+# logger.debug('This message will be logged to the file')
 
 def feddc(
     model,
@@ -39,7 +39,10 @@ def feddc(
     file_name: str,
     decay=1.0,
     metric_period=1,
-    alpha_coef=0.0
+    alpha_coef=0.0,
+    mu = 0.5,
+    dmu = 0.998,
+    da = 0.998
 ):
     """基于标签多样性与梯度方向的个性化联邦学习
     Parameters:
@@ -183,7 +186,7 @@ def feddc(
                 training_sets[k],
                 n_SGD,
                 loss_f,
-                lr,
+                mu,
                 global_update_last,
                 local_update_last,
                 hist_i,
@@ -283,7 +286,9 @@ def feddc(
 
         # 学习率衰减
         lr *= decay
-
+        mu *= dmu
+        alpha_coef *= da
+        
         ''' ------------------------每轮覆盖存储loss/acc>>>>>>>>>>>>>>>>>>>>>>>> '''
         # n轮K个客户端的loss与acc,无需存储
         # save_pkl(loss_hist, "loss", file_name)
@@ -346,7 +351,7 @@ def fedDC_local_learning(
         train_data,
         n_SGD: int,
         loss_f,
-        lr,
+        mu,
         grad_global_pre,
         grad_local_pre,
         hist_i,
@@ -387,13 +392,13 @@ def fedDC_local_learning(
                 local_parameter = torch.cat((local_parameter, param.reshape(-1)), 0)
 
         loss_r = alpha/2 * torch.sum((local_parameter - (global_model_param - hist_i))*(local_parameter - (global_model_param - hist_i)))
-        loss_g = torch.sum(local_parameter * state_update_diff)*0.5
+        loss_g = torch.sum(local_parameter * state_update_diff)*mu
         '''
         3.13 18:47  此处loss_g 与论文不同，按论文的方法造成无法收敛，现修改为源码中计算方法。
         '''
 
-        # batch_loss = batch_loss + loss_r + loss_g
-        batch_loss = batch_loss + loss_r
+        batch_loss = batch_loss + loss_r + loss_g
+        # batch_loss = batch_loss + loss_r
 
         batch_loss.backward()
         optimizer.step()
